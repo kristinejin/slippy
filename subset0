@@ -1,0 +1,9 @@
+#! /usr/bin/env python3
+
+# 'q' - quit
+# 'p' - print
+# 'd' - delete 
+# 's' - substitute (g permitted)
+# -n -  stops input lines being printed by default
+
+# read from standard input

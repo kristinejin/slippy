@@ -17,4 +17,4 @@ Slippy works very similar as `sed` except... it is called slippy!
 - -f -> command line option to read slippy commands from a specified file
 - use # to leave comments for a command
 
-==Please read more about sed command [here](https://www.gnu.org/software/sed/manual/sed.html)==
+==Please read more about sed command== [here](https://www.gnu.org/software/sed/manual/sed.html)

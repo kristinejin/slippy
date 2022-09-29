@@ -1,8 +1,962 @@
 #! /usr/bin/env python3
 
-def main():
-    pass
+
+"""
+    * Program Name: Slippy
+    
+    * Decription: A clone of the sed command
+    
+    * Written by: Kristine Jin 
+    
+    * For: Comp2041 Assignment 2
+    
+    * Contact: z5362038@ad.unsw.edu.au / yitong.jin@outlook.com
+"""
+
+import sys
+from sys import exit
+import re
+import argparse
+import io
+from contextlib import redirect_stderr
+
+
+# parsed arguments
+args = None
+
+
+def Main():
+    """
+    Main function to operate slippy
+    """
+
+    if len(sys.argv) < 2:
+        RaiseUsageError()
+
+    # get and parse all arguments from user, save as global variable
+    global args
+    args = ParseArgs()
+
+    # process script if the command is inputted from a file
+    if not args.isScript == None:
+        with open(args.isScript, 'r') as f:
+            lines = f.readlines()
+            command = ''.join(lines)
+    # command as string
+    else:
+        command = args.command
+
+    # parse the command
+    processedComm = ProcessCommand(command)
+
+    # default input to stdin
+    userInput = sys.stdin
+    fromFile = False
+
+    # process input files when they exist
+    if not args.inputFiles == list():
+        try:
+            userInput = open(args.inputFiles.pop(0))
+        except Exception:
+            RaiseGeneralError()
+        fromFile = True
+
+    # get first input line
+    line = userInput.readline().strip()
+
+    # Handle empty input
+    if not line:
+        exit(0)
+
+    # variables to keep track of progress
+    prevLine = line
+    numLine = 1
+    isEnd = False
+
+    # start processing all input lines, read one line ahead
+    while True:
+        prevLine = line
+        line = userInput.readline().strip()
+
+        # handle potential end of input
+        if not line:
+            # for input files: switch to the next input file if current input file is empty
+            if fromFile and len(args.inputFiles) != 0:
+                try:
+                    userInput = open(args.inputFiles.pop(0))
+                except Exception:
+                    RaiseGeneralError()
+                line = userInput.readline().strip()
+            # reach end of input, process last line
+            else:
+                isEnd = True
+                CallFunction(numLine, processedComm, prevLine, isEnd, 0, True)
+                break
+
+        # process line
+        CallFunction(numLine, processedComm, prevLine, isEnd, 0, True)
+
+        # increment number of lines in input
+        numLine += 1
+
+# ------------------------------ #
+#           Processes            #
+# ------------------------------ #
+
+
+def CallFunction(numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool) -> None:
+    """ Calls function from the first command on a command list 
+
+    Args:
+        numLine (int): number of line up to in input
+        commList (list): list commands to be processed
+        line (str): line of input to be processed
+        isEnd (bool): true when current line is the last line
+        commIndex (int): index of command up to, intially 0, increment with every command called
+        doPrint (bool): true when input to be auto print
+    """
+
+    # get current command and increment index to the next command
+    command = commList[commIndex]
+    commIndex += 1
+
+    # call function according to command
+    if command['function'] == 'q':
+        SlippyQuit(command['address'], numLine,
+                   commList, line, isEnd, commIndex, doPrint)
+    elif command['function'] == 'p':
+        SlippyPrint(command['address'], numLine,
+                    commList, line, isEnd, commIndex, doPrint)
+    elif command['function'] == 'd':
+        SlippyDelete(command['address'], numLine,
+                     commList, line, isEnd, commIndex, doPrint)
+    elif command['function'] == 's':
+        SlippySub(command['address'], numLine,
+                  commList, line, isEnd, commIndex, command['target'], command['replace'], command['forAll'], doPrint)
+    elif command['function'] == 'i':
+        SlippyInsert(command['address'], numLine,
+                     commList, line, isEnd, commIndex, doPrint, command['swapTo'])
+    elif command['function'] == 'a':
+        SlippyAppend(command['address'], numLine,
+                     commList, line, isEnd, commIndex, doPrint, command['swapTo'])
+    elif command['function'] == 'c':
+        SlippyChange(command['address'], numLine,
+                     commList, line, isEnd, commIndex, doPrint, command['swapTo'])
+    # raise error when invalid function given
+    else:
+        RaiseInvalidCommandError()
+
+
+def ParseArgs():
+    """ Parses the arguments using argparse
+
+    Returns:
+        args - argparse.Namespace: contains the following:
+            * replaceFile - bool - Replaces file contents with Slippy output
+            * stopPrint - bool - Stops input lines being printed by default
+            * isScript - str - Reads Slippy commands from the specified file
+            Or * command - str - Slippy command
+            * inputFiles - list - list of filenames as input
+    """
+    parser = argparse.ArgumentParser(
+        description="Parse argument from user",
+        exit_on_error=False
+    )
+
+    parser.add_argument(
+        '-i', '--replaceFile',
+        action='store_true',
+        required=False,
+        help='Replaces file contents with Slippy output'
+    )
+
+    parser.add_argument(
+        '-n', '--stopPrint', action='store_true',
+        required=False,
+        help='Stops input lines being printed by default'
+    )
+
+    parser.add_argument(
+        '-f', '--isScript', type=str,
+        help='Reads Slippy commands from the specified file'
+    )
+
+    options = parser.parse_known_args()[0]
+
+    if not options.isScript:
+
+        parser.add_argument(
+            'command', type=str,
+            help='Slippy command',
+            nargs='?'
+        )
+
+    parser.add_argument(
+        'inputFiles',
+        help='List of file name as input', nargs='*'
+    )
+
+    try:
+        f = io.StringIO()
+        with redirect_stderr(f):
+            parser.parse_args()
+        args = parser.parse_args()
+    except SystemExit:
+        RaiseUsageError()
+
+    return args
+
+
+def ProcessCommand(command: str) -> list:
+    # initialise command list
+    comm = list()
+
+    # seperate multiple commands
+    commands = re.split(r';|\n', command)
+    commands = list(filter(None, commands))
+
+    # regex for substitution command
+    subReg = r"/?.*/?s(.).*(\1).*(\1)g?\s*#?.*"
+
+    # process one command at a time
+    for command in commands:
+        # initialise dictionary contains details for a single command
+        commD = dict()
+        # substitution function
+        if re.search(subReg, command):
+            # group represents
+            # 1 - address
+            # 2 - delimiter
+            # 3 - target
+            # 4 - delimiter
+            # 5 - replace
+            # 6 - delimiter
+            # 7 - forAll
+            # 8 - comment
+
+            # grouped regex for substitution command
+            regex = r'(/?.*/?)s(.)(.*)(\2)(.*)(\2)(g?)(\s*#?.*)'
+
+            # label function to use as s (substitution)
+            function = 's'
+
+            # parse command to groups
+            parsedComm = re.search(regex, command)
+
+            # parse address
+            address = parsedComm.group(1)
+            address = ParseAddress(address)
+
+            # delimiter = parsedComm.group(2)
+            target = parsedComm.group(3)
+            replace = parsedComm.group(5)
+
+            # track presence of optional g flag
+            forAll = False
+            if parsedComm.group(7).strip() == 'g':
+                forAll = True
+
+            # get comment for this command
+            comment = parsedComm.group(8)
+
+            # generate dictionary for this command
+            commD = {
+                'function': function,
+                'address': address,
+                'target': target,
+                'replace': replace,
+                'forAll': forAll,
+                'comment': comment
+            }
+
+            # append to overall command list
+            comm.append(commD)
+
+        # print, quit and delete functions
+        elif re.search(r'(/?[^ ]*/?)\s*([pqd])(\s*#?.*)', command):
+            # parse command to groups
+            parsedComm = re.search(r'(/?[^ ]*/?)\s*([pqd])(\s*#?.*)', command)
+
+            # parse address
+            address = parsedComm.group(1).strip()
+            commD['address'] = ParseAddress(address)
+
+            # lable function
+            commD['function'] = parsedComm.group(2).strip()
+
+            # record comment
+            commD['comment'] = parsedComm.group(3)
+
+            # append to overall command list
+            comm.append(commD)
+
+        # Stage 2: append, change and insert
+        else:
+            # parse command to groups
+            parsedComm = re.search(
+                r'(/?[^ ]*/?)\s*([aic])\s*(.*)\n?(#?.*)', command)
+            # parse address
+            address = parsedComm.group(1)
+            commD['address'] = ParseAddress(address)
+
+            # lable function
+            commD['function'] = parsedComm.group(2).strip()
+
+            # record what to insert/change/append
+            commD['swapTo'] = parsedComm.group(3)
+
+            # record comment
+            commD['comment'] = parsedComm.group(4)
+            comm.append(commD)
+
+    return comm
+
+
+def ParseAddress(address: str) -> dict:
+    """_summary_
+
+    Args:
+        address (str): unparsed address, may contains 0 to 2 addresses seperated by comma
+
+    Returns:
+        dict: {
+            'numAddress': 0/1/2,
+            'address1': {
+                'isRegex': bool,
+                'isDollar': bool,
+                'address': str()
+            },
+            'address2': {
+                'isRegex': bool,
+                'isDollar': bool,
+                'address': str()
+            }
+        }
+    """
+    # intialise address dict
+    add = {
+        'numAddress': 0,
+        'address1': dict(),
+        'address2': dict(),
+        'start': False,
+        'end': False
+    }
+
+    # group the address
+    reg = r"(/?[^,]*/?),?(/?.*/?)"
+    res = re.search(reg, address)
+
+    address1 = res.group(1).strip()
+    address2 = res.group(2).strip()
+
+    # check address existance
+    if address1:
+        add['numAddress'] += 1
+    if address2:
+        add['numAddress'] += 1
+
+    # check for type of address and add to address dict
+    add['address1'] = RegOrLocation(address1)
+    add['address2'] = RegOrLocation(address2)
+
+    return add
+
+
+def ProcessOutput(line: str, isSlippyPrint=False) -> None:
+    """ Output string in required form, currently only output to stdout
+
+    Args:
+        line (str): line to be processed
+        isSlippyPrint (bool, optional): true when this function is called by process output. Defaults to False.
+    """
+    # sys.stdout.write(line)
+    # outputLoc = sys.stdout
+    if isSlippyPrint:
+        print(line)
+        return
+    if args.stopPrint:
+        return
+    print(line)
+
+
+# ------------------------------ #
+#            Checks              #
+# ------------------------------ #
+
+def RegOrLocation(address: str) -> dict:
+    """ Given a single address, check if it is a location or a regex and parse it
+
+    Args:
+        address (str): address to be parsed
+
+    Returns:
+        dict: {
+            'isRegex': False,
+            'isDollar': False,
+            'address': str()
+        }
+    """
+
+    result = {
+        'isRegex': False,
+        'isDollar': False,
+        'address': str()
+    }
+
+    # skip empty address
+    if address == '':
+        return
+
+    # parse address
+    regexReg = r"/.*/"
+    # regex
+    if re.search(regexReg, address):
+        result['isRegex'] = True
+        result['address'] = address[1:-1]
+    # location
+    else:
+        if address == '$':
+            result['isDollar'] = True
+        else:
+            result['address'] = int(address)
+
+    return result
+
+
+def CheckReachAddress(addressInfo: dict, numLine: int, line: str, isEnd: bool) -> bool:
+    """ Check whether an input is matched the address
+
+    Args:
+        addressInfo (dict): contains information on address
+        numLine (int): number of line upto in the input
+        line (str): line to be processed
+        isEnd (bool): true when curr line is the last line
+
+    Returns:
+        bool: true when line or numLine have reached/matched the given address
+    """
+    reached = False
+    # regex
+    if addressInfo['isRegex']:
+        if re.search(addressInfo['address'], line):
+            reached = True
+    elif addressInfo['isDollar']:
+        if isEnd:
+            reached = True
+    # location
+    else:
+        if numLine == addressInfo['address']:
+            reached = True
+    return reached
+
+# ------------------------------ #
+#             Errors             #
+# ------------------------------ #
+
+
+def RaiseUsageError():
+    """
+    Raise usage error
+    """
+    print(
+        f"usage: slippy [-i] [-n] [-f < script-file > | < sed-command > ] [ < files > ...]", file=sys.stderr)
+    exit(1)
+
+
+def RaiseGeneralError():
+    """
+    Raise a general error
+    """
+    print(
+        f"slippy: error", file=sys.stderr)
+    exit(1)
+
+
+def RaiseInvalidCommandError():
+    """
+    Raise a general error
+    """
+    print(
+        f"slippy: command line: invalid command", file=sys.stderr)
+    exit(1)
+
+# ------------------------------ #
+#            Funcions            #
+# ------------------------------ #
+
+
+def SlippyQuit(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool):
+    """ Quit program with a given address
+
+    Args:
+        addressInfo (dict): info on address
+        numLine (int): num of input up to
+        commList (list): list of command to be processed
+        line (str): line to be processed
+        isEnd (bool): true when curr line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+    """
+    # no address
+    if addressInfo['numAddress'] == 0:
+        ProcessOutput(line)
+        exit(0)
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            ProcessOutput(line)
+            exit(0)
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+        RaiseInvalidCommandError()
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
+
+
+def SlippyPrint(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool):
+    """ Output a given input line on a given address
+
+    Args:
+        addressInfo (dict): info on address
+        numLine (int): num of input up to
+        commList (list): list of command to be processed
+        line (str): line to be processed
+        isEnd (bool): true when curr line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+    """
+    # no address
+    if addressInfo['numAddress'] == 0:
+        ProcessOutput(line, isSlippyPrint=True)
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            ProcessOutput(line, isSlippyPrint=True)
+
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address']:
+                addressInfo['end'] = True
+        
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            
+            if doPrint:
+                ProcessOutput(line)
+            
+            ProcessOutput(line, isSlippyPrint=True)
+            return
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+
+        if hasStarted and not addressInfo['end']:
+            ProcessOutput(line, isSlippyPrint=True)
+        elif address1['isRegex']:
+            if matchedAdd1:
+                ProcessOutput(line, isSlippyPrint=True)
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
+
+
+def SlippyDelete(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool):
+    """ Delete a given input line on a given address
+
+    Args:
+        addressInfo (dict): info on address
+        numLine (int): num of input up to
+        commList (list): list of command to be processed
+        line (str): line to be processed
+        isEnd (bool): true when curr line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+    """
+    # no address
+    if addressInfo['numAddress'] == 0:
+        doPrint = False
+        return
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            doPrint = False
+            return
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+        # do something
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+        
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address']:
+                addressInfo['end'] = True
+
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            doPrint = False
+            return
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+                doPrint = False
+                return
+        
+        if hasStarted and not addressInfo['end']:
+            return
+        elif address1['isRegex']:
+            if matchedAdd1:
+                return
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
+
+
+def SlippySub(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, target: str, replace: str, forAll: bool, doPrint: bool):
+    """ Substitue a string matches the pattern of a regex and replace it with a given replacement
+    Default to apply to all matching string, can give optional address to make SlippySub apply only
+    on those addresses. 
+
+    Args:
+        addressInfo (dict): info on address
+        numLine (int): num of input up to
+        commList (list): list of command to be processed
+        line (str): line to be processed
+        isEnd (bool): true when curr line is last line
+        commIndex (int): index of command up to in commList
+        target (str): target to be replaced
+        replace (str): replace target with this string
+        forAll (bool): true when 'g' present in command, do sub command for every matched occured in a line
+        doPrint (bool): true when auto print
+    """
+
+    # no address
+    if addressInfo['numAddress'] == 0:
+        line = DoSub(target, replace, line, forAll)
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            line = DoSub(target, replace, line, forAll)
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address']:
+                addressInfo['end'] = True
+        
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            line = DoSub(target, replace, line, forAll)
+            if doPrint:
+                ProcessOutput(line)
+            return
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+                
+          
+        if hasStarted and not addressInfo['end']:
+            line = DoSub(target, replace, line, forAll)
+        elif address1['isRegex']:
+            if matchedAdd1:
+                line = DoSub(target, replace, line, forAll)
+        
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
+
+
+def DoSub(target: str, replace: str, line: str, forAll: bool) -> str:
+    """ Subfunction of SlippySub, performs substitution for a required line
+
+    Args:
+        target (str): target to be replaced
+        replace (str): replacement of target
+        line (str): line to be processed
+        forAll (bool): true when 'g' present in command, do sub for all matches in a line
+
+    Returns:
+        str: substituted line
+    """
+    if re.search(fr'{target}', line):
+        if forAll:
+            result = re.sub(fr'{target}', replace, line)
+        else:
+            result = re.sub(fr'{target}', replace, line, 1)
+
+        line = result
+    return line
+
+
+def SlippyAppend(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool, swapTo: str):
+    """ Append to the matching line (add line after match) with given string
+
+    Args:
+        addressInfo (dict): info of address
+        numLine (int): line index in input
+        commList (list): list of command to be processed
+        line (str): line to be matched
+        isEnd (bool): true when current line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+        swapTo (str): string to be append
+    """
+
+    if doPrint and commIndex == len(commList):
+        ProcessOutput(line)
+
+    # no address
+    if addressInfo['numAddress'] == 0:
+        ProcessOutput(swapTo)
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            ProcessOutput(swapTo)
+
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address']:
+                addressInfo['end'] = True
+        
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            ProcessOutput(swapTo)
+            return
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+
+        if hasStarted and not addressInfo['end']:
+            ProcessOutput(swapTo)
+        elif address1['isRegex']:
+            if matchedAdd1:
+                ProcessOutput(swapTo)
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+
+
+def SlippyInsert(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool, swapTo: str):
+    """ Insert to the matching line (add line before match) with given string
+
+    Args:
+        addressInfo (dict): info of address
+        numLine (int): line index in input
+        commList (list): list of command to be processed
+        line (str): line to be matched
+        isEnd (bool): true when current line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+        swapTo (str): string to be inserted
+    """
+    # no address
+    if addressInfo['numAddress'] == 0:
+        ProcessOutput(swapTo)
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            ProcessOutput(swapTo)
+
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address']:
+                addressInfo['end'] = True
+        
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            ProcessOutput(swapTo)
+            ProcessOutput(line)
+            return
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+        
+        if hasStarted and not addressInfo['end']:
+            ProcessOutput(swapTo)
+        elif address1['isRegex']:
+            if matchedAdd1:
+                ProcessOutput(swapTo)
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
+
+
+def SlippyChange(addressInfo: dict, numLine: int, commList: list, line: str, isEnd: bool, commIndex: int, doPrint: bool, swapTo: str):
+    """ Change the matching line to a given string
+
+    Args:
+        addressInfo (dict): info of address
+        numLine (int): line index in input
+        commList (list): list of command to be processed
+        line (str): line to be matched
+        isEnd (bool): true when current line is last line
+        commIndex (int): index of command up to in commList
+        doPrint (bool): true when auto print
+        swapTo (str): string to changed to
+    """
+    # no address
+    if addressInfo['numAddress'] == 0:
+        line = swapTo
+    # 1 address
+    elif addressInfo['numAddress'] == 1:
+
+        info = addressInfo['address1']
+
+        matched = CheckReachAddress(info, numLine, line, isEnd)
+
+        if matched:
+            line = swapTo
+
+    # 2 address
+    elif addressInfo['numAddress'] == 2:
+
+        address1 = addressInfo['address1']
+        address2 = addressInfo['address2']
+
+        hasStarted = addressInfo['start']
+
+        matchedAdd1 = CheckReachAddress(address1, numLine, line, isEnd)
+
+        matchedAdd2 = CheckReachAddress(address2, numLine, line, isEnd)
+
+        if not address2['isRegex']:
+            if hasStarted and numLine > address2['address'] and not addressInfo['end']:
+                addressInfo['end'] = True
+                line = swapTo
+                ProcessOutput(line)
+                return
+        
+        if hasStarted and matchedAdd2:
+            addressInfo['start'] = False
+            if not address2['isRegex']:
+                addressInfo['end'] = True
+            line = swapTo
+            ProcessOutput(line)
+            return
+        
+        if addressInfo['end'] and matchedAdd1:
+            line = swapTo
+
+        if matchedAdd1:
+            if not addressInfo['end']:
+                hasStarted = True
+                addressInfo['start'] = True
+
+        if hasStarted and not addressInfo['end']:
+            return
+        elif address1['isRegex']:
+            if matchedAdd1 and not addressInfo['end']:
+                return
+
+
+    if commIndex < len(commList):
+        CallFunction(numLine, commList, line, isEnd, commIndex, doPrint)
+    elif doPrint:
+        ProcessOutput(line)
 
 
 if __name__ == '__main__':
-    main()
+    Main()

@@ -5,6 +5,7 @@
 Slippy works very similar as `sed` except... it is called slippy!
 
 **Notes on slippy command:**
+---
 - p -> print command
 - q -> quit command
 - d -> delete command

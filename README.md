@@ -1,6 +1,6 @@
 # 🌈 Slippy 🪐
 
-*Slippy is a simple implementation of the linux `sed` command developed in python*
+*Slippy is a simple implementation of the unix system command `sed` developed in python*
 
 Slippy works very similar as `sed` except... it is called slippy!
 
